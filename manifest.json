@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ZD Staffside Quick Links",
+  "version": "3.4.9",
+  "description": "Injects Staffside quick-access buttons into Klaviyo Zendesk tickets.",
+  "permissions": ["storage", "cookies", "webNavigation"],
+  "host_permissions": [
+    "https://klaviyo.zendesk.com/*",
+    "https://www.klaviyo.com/*",
+    "https://*.klaviyo.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://klaviyo.zendesk.com/agent*"],
+      "js": ["content.js"],
+      "css": ["style.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.klaviyo.com/*"],
+      "js": ["klaviyo-content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
