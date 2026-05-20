@@ -1,0 +1,342 @@
+/* Klaviyo Staffside Quick Links v1.9 — matches Zendesk right-panel typography */
+
+#klv-staffside-panel {
+  margin: 6px 0 8px 0;
+  border-radius: 4px;
+  background: #fff;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  color: #2f3941;
+}
+
+/* ── Role row ── */
+#klv-staffside-panel .klv-role-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 20px;
+}
+
+#klv-staffside-panel .klv-role-key {
+  font-size: 14px;
+  font-weight: 400;
+  color: #5c6970;
+  white-space: nowrap;
+}
+
+/* push refresh button to the far right */
+#klv-staffside-panel .klv-btn-refresh {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #68737d;
+  border-radius: 3px;
+  line-height: 1;
+  transition: color 0.1s, background 0.1s;
+  flex-shrink: 0;
+}
+#klv-staffside-panel .klv-btn-refresh:hover {
+  color: #1f73b7;
+  background: #edf7ff;
+}
+#klv-staffside-panel .klv-btn-refresh:disabled {
+  cursor: default;
+  color: #adbabd;
+}
+#klv-staffside-panel .klv-btn-refresh-spinning {
+  animation: klv-spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+#klv-staffside-panel .klv-role {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.klv-role-owner   { background: #fff3cd; color: #7a4b00; }
+.klv-role-admin   { background: #cce5ff; color: #004085; }
+.klv-role-manager { background: #d4edda; color: #155724; }
+.klv-role-analyst { background: #e9ebed; color: #49545c; }
+.klv-role-unknown { background: #e9ebed; color: #68737d; }
+
+/* ── Access status row ── */
+#klv-staffside-panel .klv-access {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 20px;
+}
+
+#klv-staffside-panel .klv-access-key {
+  font-size: 14px;
+  font-weight: 400;
+  color: #5c6970;
+  white-space: nowrap;
+}
+
+#klv-staffside-panel .klv-access-value {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.klv-access-value-write { color: #186146; }
+.klv-access-value-read  { color: #68737d; }
+
+#klv-staffside-panel .klv-access-expiry {
+  font-size: 13px;
+  color: #68737d;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Integrations row ── */
+#klv-staffside-panel .klv-integrations {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px;
+  flex-wrap: wrap;
+}
+
+#klv-staffside-panel .klv-int-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+
+/* Image icons (actual brand logos from Klaviyo CDN) */
+#klv-staffside-panel img.klv-int-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  object-fit: contain;
+  cursor: default;
+  display: inline-block;
+  vertical-align: middle;
+  transition: transform 0.1s ease;
+  user-select: none;
+}
+
+/* Emoji fallback for integrations with no icon URL — same 18×18 box as img icons */
+#klv-staffside-panel span.klv-int-emoji {
+  font-size: 13px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  transition: transform 0.1s ease;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+#klv-staffside-panel .klv-int-icon:hover {
+  transform: scale(1.4);
+}
+
+#klv-staffside-panel .klv-int-disabled {
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+
+#klv-staffside-panel .klv-int-loading {
+  font-size: 14px;
+  color: #adbabd;
+  letter-spacing: 2px;
+}
+
+/* ── Buttons — stacked by default, side by side only when panel is very wide ── */
+#klv-staffside-panel .klv-buttons {
+  padding: 8px 20px 8px 40px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+#klv-staffside-panel .klv-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  text-decoration: none !important;
+  border: 1px solid transparent;
+  transition: background 0.12s;
+  line-height: 20px;
+  flex: 1 1 240px;
+  box-sizing: border-box;
+}
+
+#klv-staffside-panel .klv-btn-staffside {
+  background: #fff;
+  color: #1f73b7 !important;
+  border-color: #1f73b7;
+}
+#klv-staffside-panel .klv-btn-staffside:hover { background: #edf7ff; }
+
+#klv-staffside-panel .klv-btn-switch-write {
+  background: #1f73b7;
+  color: #fff !important;
+  border-color: #1f73b7;
+}
+#klv-staffside-panel .klv-btn-switch-write:hover { background: #1a5f99; }
+
+#klv-staffside-panel .klv-btn-switch-read {
+  background: #49545c;
+  color: #fff !important;
+  border-color: #49545c;
+}
+#klv-staffside-panel .klv-btn-switch-read:hover { background: #2f3941; }
+
+/* ── Loading state ── */
+#klv-staffside-panel .klv-loading {
+  padding: 8px 20px;
+  font-size: 14px;
+  color: #68737d;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.klv-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid #d8dcde;
+  border-top-color: #1f73b7;
+  border-radius: 50%;
+  animation: klv-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes klv-spin { to { transform: rotate(360deg); } }
+
+/* ══════════════════════════════════════════════════════════════════
+   DARK MODE — applies when system is in dark mode OR when Zendesk's
+   own dark theme is active (detected via .klv-dark class added by JS)
+
+   Background is sampled from the Zendesk sidebar at runtime via JS
+   and applied as --klv-bg so the panel colour matches exactly.
+   All borders are removed so the panel blends seamlessly.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Shared dark-mode rules applied via both media query and .klv-dark class */
+@media (prefers-color-scheme: dark) { #klv-staffside-panel { --klv-dm: 1; } }
+#klv-staffside-panel.klv-dark       { --klv-dm: 1; }
+
+/* Apply dark styles when .klv-dark is set (Zendesk dark toggle or system dark) */
+#klv-staffside-panel.klv-dark {
+  /* Use the exact Zendesk sidebar colour sampled by JS; fallback if unavailable */
+  background: var(--klv-bg, #1f2937);
+  border: none;
+  color: #e5e7eb;
+}
+#klv-staffside-panel.klv-dark .klv-role-row,
+#klv-staffside-panel.klv-dark .klv-access,
+#klv-staffside-panel.klv-dark .klv-integrations {
+  border-bottom: none;
+}
+#klv-staffside-panel.klv-dark .klv-int-loading {
+  color: #4b5563;
+}
+#klv-staffside-panel.klv-dark .klv-role-key,
+#klv-staffside-panel.klv-dark .klv-access-key,
+#klv-staffside-panel.klv-dark .klv-loading,
+#klv-staffside-panel.klv-dark .klv-access-expiry {
+  color: #9ca3af;
+}
+#klv-staffside-panel.klv-dark .klv-btn-refresh {
+  color: #9ca3af;
+}
+#klv-staffside-panel.klv-dark .klv-btn-refresh:hover {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+}
+#klv-staffside-panel.klv-dark .klv-btn-refresh:disabled {
+  color: #4b5563;
+}
+#klv-staffside-panel.klv-dark .klv-btn-staffside {
+  background: var(--klv-bg, #1f2937);
+  color: #60a5fa !important;
+  border-color: #60a5fa;
+}
+#klv-staffside-panel.klv-dark .klv-btn-staffside:hover {
+  background: rgba(96, 165, 250, 0.12);
+}
+#klv-staffside-panel.klv-dark .klv-btn-switch-write {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+#klv-staffside-panel.klv-dark .klv-btn-switch-write:hover { background: #1d4ed8; }
+#klv-staffside-panel.klv-dark .klv-btn-switch-read {
+  background: #374151;
+  border-color: #374151;
+}
+#klv-staffside-panel.klv-dark .klv-btn-switch-read:hover { background: #4b5563; }
+#klv-staffside-panel.klv-dark .klv-role-owner   { background: #451a03; color: #fcd34d; }
+#klv-staffside-panel.klv-dark .klv-role-admin   { background: #1e3a5f; color: #93c5fd; }
+#klv-staffside-panel.klv-dark .klv-role-manager { background: #14432a; color: #6ee7b7; }
+#klv-staffside-panel.klv-dark .klv-role-analyst { background: #374151; color: #d1d5db; }
+#klv-staffside-panel.klv-dark .klv-role-unknown { background: #374151; color: #9ca3af; }
+#klv-staffside-panel.klv-dark .klv-access-value-write { color: #6ee7b7; }
+#klv-staffside-panel.klv-dark .klv-access-value-read  { color: #9ca3af; }
+#klv-staffside-panel.klv-dark .klv-spinner {
+  border-color: #374151;
+  border-top-color: #60a5fa;
+}
+
+/* System-level dark mode (prefers-color-scheme) — mirrors .klv-dark rules */
+@media (prefers-color-scheme: dark) {
+  #klv-staffside-panel {
+    background: var(--klv-bg, #1f2937);
+    border: none;
+    color: #e5e7eb;
+  }
+  #klv-staffside-panel .klv-role-row,
+  #klv-staffside-panel .klv-access,
+  #klv-staffside-panel .klv-integrations {
+    border-bottom: none;
+  }
+  #klv-staffside-panel .klv-int-loading { color: #4b5563; }
+  #klv-staffside-panel .klv-role-key,
+  #klv-staffside-panel .klv-access-key,
+  #klv-staffside-panel .klv-loading,
+  #klv-staffside-panel .klv-access-expiry {
+    color: #9ca3af;
+  }
+  #klv-staffside-panel .klv-btn-refresh { color: #9ca3af; }
+  #klv-staffside-panel .klv-btn-refresh:hover {
+    color: #60a5fa;
+    background: rgba(96, 165, 250, 0.12);
+  }
+  #klv-staffside-panel .klv-btn-refresh:disabled { color: #4b5563; }
+  #klv-staffside-panel .klv-btn-staffside {
+    background: var(--klv-bg, #1f2937);
+    color: #60a5fa !important;
+    border-color: #60a5fa;
+  }
+  #klv-staffside-panel .klv-btn-staffside:hover { background: rgba(96, 165, 250, 0.12); }
+  #klv-staffside-panel .klv-btn-switch-write { background: #2563eb; border-color: #2563eb; }
+  #klv-staffside-panel .klv-btn-switch-write:hover { background: #1d4ed8; }
+  #klv-staffside-panel .klv-btn-switch-read { background: #374151; border-color: #374151; }
+  #klv-staffside-panel .klv-btn-switch-read:hover { background: #4b5563; }
+  .klv-role-owner   { background: #451a03; color: #fcd34d; }
+  .klv-role-admin   { background: #1e3a5f; color: #93c5fd; }
+  .klv-role-manager { background: #14432a; color: #6ee7b7; }
+  .klv-role-analyst { background: #374151; color: #d1d5db; }
+  .klv-role-unknown { background: #374151; color: #9ca3af; }
+  .klv-access-value-write { color: #6ee7b7; }
+  .klv-access-value-read  { color: #9ca3af; }
+  .klv-spinner { border-color: #374151; border-top-color: #60a5fa; }
+}
