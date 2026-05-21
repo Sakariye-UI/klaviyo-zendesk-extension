@@ -1,4 +1,4 @@
-// klaviyo-content.js — ZD Staffside Quick Links v3.4.9
+// klaviyo-content.js — ZD Staffside Quick Links v3.5.2
 // Runs on www.klaviyo.com pages.
 // 1. When on a genuine staffside URL (not impersonated), tells background to save
 //    the staff session cookies for later lookups from ZD tickets.
@@ -124,6 +124,39 @@ async function fetchAndCacheFromApi(accountId, hasEditAccess) {
   } catch (_) {}
 }
 
+// ── Fetch integrations via /ux-api/company-applications (impersonation) ──────
+// When impersonated, staff cookies aren't available so /staff/ endpoints redirect.
+// /ux-api/company-applications is accessible with customer session cookies and
+// returns clean JSON with all enabled integrations. Works from ANY page context.
+const _customerIntFetchedAt = {};
+
+async function fetchAndCacheIntegrationsFromCustomerPage(accountId) {
+  const now = Date.now();
+  if (_customerIntFetchedAt[accountId] && now - _customerIntFetchedAt[accountId] < 10 * 60 * 1000) return;
+  _customerIntFetchedAt[accountId] = now;
+
+  try {
+    const resp = await fetch('/ux-api/company-applications', { credentials: 'include' });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!Array.isArray(data) || !data.length) return;
+
+    const integrations = data
+      .filter(item => item.app_title)
+      .map(item => ({
+        name:     item.app_title,
+        disabled: item.status !== 'ENABLED',
+        iconUrl:  item.icon_link || null
+      }));
+
+    if (integrations.length) {
+      chrome.runtime.sendMessage({
+        type: 'CACHE_INTEGRATIONS', accountId, integrations, fallback: true
+      }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
 // ── Scrape /integrations (fallback — live DOM when impersonating) ─────────────
 // Only connected integrations appear inside <tr> elements.
 // Recommended/available-to-add integrations use InternalNameplate components
@@ -206,6 +239,11 @@ function report() {
   // On ANY page in a customer account: fetch user list + access level from banner
   fetchAndCacheFromApi(accountId, hasEditAccess);
 
+  // Proactively cache integrations from the customer-facing /integrations page.
+  // This runs on every page visit when impersonated, so the cache is warm by the
+  // time the ZD panel opens — avoids the gap where role shows but integrations don't.
+  fetchAndCacheIntegrationsFromCustomerPage(accountId);
+
   // Fallback: scrape /integrations live DOM when impersonating and staffside data
   // isn't available yet. Uses fallback:true so it won't overwrite richer staffside data.
   if (path === '/integrations' || path.startsWith('/integrations/')) {
@@ -247,8 +285,15 @@ new MutationObserver(() => {
 // When the background can't get integrations via cookie swap, it asks any open
 // Klaviyo tab to fetch in the page context using the specific accountId from
 // the ticket — same-origin, so cookies always work regardless of SameSite rules.
+// If this tab is currently impersonated in that account, use the customer-facing
+// /integrations page instead — staff-side endpoint will redirect with customer cookies.
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === 'FETCH_INTEGRATIONS_FOR_ACCOUNT' && msg.accountId) {
-    fetchAndCacheIntegrations(msg.accountId);
+    const { accountId: currentAccountId } = getImpersonationState();
+    if (currentAccountId && currentAccountId === msg.accountId) {
+      fetchAndCacheIntegrationsFromCustomerPage(msg.accountId);
+    } else {
+      fetchAndCacheIntegrations(msg.accountId);
+    }
   }
 });

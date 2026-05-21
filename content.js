@@ -1,4 +1,4 @@
-// Klaviyo Staffside Quick Links — content script v1.14
+// Klaviyo Staffside Quick Links — content script v3.5.1
 // Injected on all /agent* pages so SPA navigation is covered automatically.
 
 const ACCOUNT_ID_FIELD = 66187667;
@@ -234,6 +234,11 @@ function renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpir
   panel.dataset.accountId = accountId;
   panel.dataset.email     = email || panel.dataset.email || '';
 
+  // Snapshot existing integrations before wiping innerHTML — re-inserted immediately
+  // after rebuild so they never disappear during a refresh, even while the async
+  // fetchAndRenderIntegrations call is still in flight.
+  const existingIntsHtml = panel.querySelector('.klv-integrations')?.outerHTML || null;
+
   const staffsideUrl = `https://www.klaviyo.com/staff/account/${accountId}/overview`;
   const switchUrl    = hasEditAccess
     ? `https://www.klaviyo.com/staff/staffside-switch/${accountId}/write`
@@ -269,6 +274,12 @@ function renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpir
       <a href="${switchUrl}"    target="_blank" class="klv-btn ${switchClass}">${switchText}</a>
     </div>
   `;
+
+  // Restore integrations immediately so they don't disappear during a refresh
+  if (existingIntsHtml) {
+    const buttons = panel.querySelector('.klv-buttons');
+    if (buttons) buttons.insertAdjacentHTML('beforebegin', existingIntsHtml);
+  }
 
   applyDarkMode(panel);
   panel.querySelector('.klv-btn-refresh')?.addEventListener('click', () => refreshPanel(panel));

@@ -1,4 +1,4 @@
-// Background service worker — ZD Staffside Quick Links v3.4.9
+// Background service worker — ZD Staffside Quick Links v3.5.1
 
 // ── Message handlers ──────────────────────────────────────────────────────────
 
@@ -105,13 +105,33 @@ chrome.webNavigation.onBeforeNavigate.addListener(
 
 async function preFetchAndCacheAccount(accountId) {
   try {
-    if (await readCache(accountId)) return;
-    const url = 'https://www.klaviyo.com/staff/account/' + accountId + '/overview';
-    const resp = await fetch(url, { credentials: 'include' });
-    if (!resp.ok) return;
-    const html = await resp.text();
-    if (!isStaffsidePage(html, resp.url)) return;
-    await writeCache(accountId, await parseStaffsideData(html, null, accountId));
+    // Check what we already have — fetch only what's missing.
+    // This fires on onBeforeNavigate (staff cookies still active), so both fetches
+    // are reliable here. Integrations are fetched in parallel with overview so the
+    // cache is warm before the session switches to customer cookies.
+    const [cached, intCached] = await Promise.all([
+      readCache(accountId),
+      readIntegrationsCache(accountId),
+    ]);
+    if (cached && intCached) return;
+
+    const [resp, intResp] = await Promise.all([
+      !cached    ? fetch('https://www.klaviyo.com/staff/account/' + accountId + '/overview',     { credentials: 'include' }) : Promise.resolve(null),
+      !intCached ? fetch('https://www.klaviyo.com/staff/account/' + accountId + '/integrations', { credentials: 'include' }) : Promise.resolve(null),
+    ]);
+
+    if (resp) {
+      if (!resp.ok) return;
+      const html = await resp.text();
+      if (!isStaffsidePage(html, resp.url)) return;
+      await writeCache(accountId, await parseStaffsideData(html, null, accountId));
+    }
+
+    if (intResp?.ok && new URL(intResp.url).pathname.startsWith('/staff/')) {
+      const intHtml = await intResp.text();
+      const integrations = parseIntegrations(intHtml);
+      if (integrations.length) await writeIntegrationsCache(accountId, integrations);
+    }
   } catch (_) {}
 }
 
@@ -326,6 +346,11 @@ async function fetchStaffsideData(accountId, email, force = false) {
       refreshCacheInBackground(accountId, email); // update staffside in background
       return customerData;
     }
+  } else {
+    // Force refresh skips the cache layers above, but we still read the customer page
+    // cache here so step 4's fallback has a role to show if the live staffside fetch
+    // fails (e.g. currently impersonated — staff cookies unavailable).
+    customerData = await readCustomerPageCache(accountId, email);
   }
 
   // 3. Try fresh staffside fetch (slower — network round trip, possibly cookie swap)
