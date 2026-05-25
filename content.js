@@ -402,6 +402,19 @@ chrome.runtime.onMessage.addListener((msg) => {
   renderIntegrationsRow(panel, msg.integrations);
 });
 
+// ── Push listener — background pushes role/access the instant it's cached ────
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type !== 'PUSH_STAFFSIDE_DATA') return;
+  const panel = document.getElementById('klv-staffside-panel');
+  if (!panel || panel.dataset.accountId !== msg.accountId) return;
+  const { role = null, hasEditAccess = false, accessExpiry = null, fromCache = false } = msg;
+  renderPanel(panel, {
+    accountId: msg.accountId,
+    email:     panel.dataset.email,
+    role, hasEditAccess, accessExpiry, fromCache
+  });
+});
+
 function esc(s) {
   if (!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

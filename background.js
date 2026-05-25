@@ -9,6 +9,11 @@ let fetchInProgress = false;
 // waiting for the content script's retry timer.
 const pendingIntegrationTabs = {}; // accountId → Set<tabId>
 
+// Tabs waiting for role/access data that wasn't available at panel-inject time.
+// Populated when FETCH_STAFFSIDE_DATA returns role:null.
+// Flushed the moment CACHE_CUSTOMER_PAGE_DATA arrives with usable data.
+const pendingRoleTabs = {}; // accountId → Map<tabId, email>
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'FETCH_STAFFSIDE_DATA') {
     const force = !!msg.force;
@@ -29,7 +34,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     fetchInProgress = true;
     fetchPromise
-      .then(data => sendResponse(data))
+      .then(data => {
+        sendResponse(data);
+        // If role is still unknown, register this tab so we can push the moment
+        // klaviyo-content.js caches the data via CACHE_CUSTOMER_PAGE_DATA.
+        if (data.role === null && sender.tab?.id) {
+          if (!pendingRoleTabs[msg.accountId]) pendingRoleTabs[msg.accountId] = new Map();
+          pendingRoleTabs[msg.accountId].set(sender.tab.id, msg.email || '');
+        }
+      })
       .catch(() => sendResponse({ role: null, hasEditAccess: false, accessExpiry: null }))
       .finally(() => { fetchInProgress = false; });
     return true;
@@ -59,8 +72,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'CACHE_CUSTOMER_PAGE_DATA') {
     const { accountId, users, remoteAccess } = msg;
     if (!accountId) return;
-    if (users)        writeCustomerUsersCache(accountId, users);
-    if (remoteAccess) writeCustomerSecurityCache(accountId, remoteAccess);
+    const writes = [];
+    if (users)        writes.push(writeCustomerUsersCache(accountId, users));
+    if (remoteAccess) writes.push(writeCustomerSecurityCache(accountId, remoteAccess));
+
+    // Push to any Zendesk tabs that were waiting for role/access data.
+    // Wait for writes to settle first so readCustomerPageCache sees the new data.
+    const waiting = pendingRoleTabs[accountId];
+    if (waiting?.size) {
+      Promise.all(writes).then(() => {
+        const tabs = pendingRoleTabs[accountId];
+        if (!tabs?.size) return;
+        delete pendingRoleTabs[accountId];
+        for (const [tabId, email] of tabs) {
+          readCustomerPageCache(accountId, email).then(data => {
+            if (!data) return;
+            chrome.tabs.sendMessage(tabId, { type: 'PUSH_STAFFSIDE_DATA', accountId, ...data })
+              .catch(() => {});
+          });
+        }
+      });
+    }
   }
 
   // Integrations fetched/scraped by klaviyo-content.js (same-origin — reliable cookies).
