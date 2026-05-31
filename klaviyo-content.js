@@ -1,4 +1,4 @@
-// klaviyo-content.js — ZD Staffside Quick Links v3.5.2
+// klaviyo-content.js — ZD Staffside Quick Links v4.0.0
 // Runs on www.klaviyo.com pages.
 // 1. When on a genuine staffside URL (not impersonated), tells background to save
 //    the staff session cookies for later lookups from ZD tickets.
@@ -110,7 +110,7 @@ async function fetchAndCacheFromApi(accountId, hasEditAccess) {
       .filter(u => !u.soft_deleted && u.email)
       .map(u => ({
         email: u.email.toLowerCase(),
-        role:  roleMap[String(u.role_id || '').split('_')[0]] || null
+        role:  roleMap[String(u.role_id != null ? u.role_id : '').split('_')[0]] || null
       }));
 
     if (!users.length) return;
@@ -146,7 +146,10 @@ async function fetchAndCacheIntegrationsFromCustomerPage(accountId) {
       .map(item => ({
         name:     item.app_title,
         disabled: item.status !== 'ENABLED',
-        iconUrl:  item.icon_link || null
+        iconUrl:  item.icon_link || null,
+        pageUrl:  item.settings_url
+          ? (item.settings_url.startsWith('http') ? item.settings_url : 'https://www.klaviyo.com' + item.settings_url)
+          : (item.app_slug ? 'https://www.klaviyo.com/integration/' + item.app_slug : null)
       }));
 
     if (integrations.length) {
@@ -215,6 +218,159 @@ function scrapeSecurityPage() {
   return { hasEditAccess, accessExpiry };
 }
 
+// ── Shared billing name map (used by both scraper and fetcher) ────────────────
+const BILLING_NAME_MAP = {
+  'profiles + email': 'Email', 'email': 'Email',
+  'mobile messaging': 'SMS', 'sms': 'SMS',
+  'reviews': 'Reviews', 'social marketing': 'Social', 'social': 'Social',
+  'customer hub': 'Customer Hub', 'customer agent': 'Customer Agent',
+  'helpdesk': 'Helpdesk', 'advanced kdp': 'Advanced KDP',
+  'marketing analytics': 'Analytics', 'analytics': 'Analytics',
+  'success and support package': 'Success',
+  'klaviyo success and support package': 'Success',
+};
+
+function normalizePlanName(raw) {
+  const lower = raw.replace(/\s*plan\s*$/i, '').trim().toLowerCase();
+  return BILLING_NAME_MAP[lower] || raw.replace(/\s*plan\s*$/i, '').trim();
+}
+
+function parseBillingOverviewText(text) {
+  const idx = text.indexOf('Monthly total');
+  if (idx === -1) return null;
+  const endIdx = text.indexOf('Total (excl. tax)', idx);
+  if (endIdx === -1) return null;
+  const lines = text.slice(idx, endIdx).split('\n').map(l => l.trim()).filter(Boolean);
+  const fmt = p => `$${p % 1 === 0 ? p.toFixed(0) : p.toFixed(2)}`;
+  const plans = [];
+  for (let i = 0; i < lines.length; i++) {
+    const pm = lines[i].match(/^\$(\d+(?:\.\d+)?)$/);
+    if (!pm) continue;
+    const price = parseFloat(pm[1]);
+    if (price <= 0) continue;
+    const candidate = (lines[i - 2] && !/^\$/.test(lines[i - 2]) && lines[i - 2] !== 'Monthly total')
+      ? lines[i - 2] : lines[i - 1];
+    if (candidate && !/^\$/.test(candidate) && candidate !== 'Monthly total') {
+      plans.push({ name: normalizePlanName(candidate), price: fmt(price) });
+    }
+  }
+  return plans.length ? { manuallyBilled: false, plans } : null;
+}
+
+// ── Scrape /settings/billing/overview (Monthly total section) ─────────────────
+function scrapeBillingOverview() {
+  const text = document.body.innerText || '';
+  return parseBillingOverviewText(text);
+}
+
+// ── Fetch billing from /ajax/billing/current-billing-package (impersonation) ──
+// The billing overview page is client-rendered React — fetching it as HTML returns
+// an empty shell. This JSON endpoint returns structured plan data and works with
+// customer session cookies (accessible when impersonated).
+const _customerBillingFetchedAt = {};
+
+const PRODUCT_TYPE_MAP = {
+  'email':             'Email',
+  'sms':               'SMS',
+  'reviews':           'Reviews',
+  'social':            'Social',
+  'social_marketing':  'Social',
+  'customer_hub':      'Cust. Hub',
+  'customer_agent':    'Cust. Agent',
+  'helpdesk':          'Helpdesk',
+  'advanced_kdp':      'Adv. KDP',
+  'advanced_analytics':'Analytics',
+  'marketing_analytics':'Analytics',
+  'klaviyo_success':   'Success',
+  'cdp':               'CDP',
+};
+
+async function fetchAndCacheBillingFromCustomerPage(accountId) {
+  const now = Date.now();
+  if (_customerBillingFetchedAt[accountId] && now - _customerBillingFetchedAt[accountId] < 10 * 60 * 1000) return;
+  _customerBillingFetchedAt[accountId] = now;
+
+  try {
+    const resp = await fetch('/ajax/billing/current-billing-package', { credentials: 'include' });
+    if (!resp.ok) return;
+    const json = await resp.json();
+    const plans = [];
+    const fmt = p => `$${p % 1 === 0 ? p.toFixed(0) : p.toFixed(2)}`;
+
+    for (const plan of Object.values(json.data || {})) {
+      if (!plan || typeof plan !== 'object') continue;
+      if (!(plan.price > 0)) continue;
+      const name = PRODUCT_TYPE_MAP[plan.product_type] || normalizePlanName(plan.label || plan.product_type || '');
+      plans.push({ name, price: fmt(plan.price) });
+    }
+
+    if (plans.length) {
+      chrome.runtime.sendMessage({ type: 'CACHE_BILLING_DATA', accountId, billing: { manuallyBilled: false, plans } }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
+// ── Fetch + cache billing from staffside (same-origin — primary billing-fetch path) ──
+// Mirrors fetchAndCacheIntegrations exactly. The service worker cannot reliably fetch
+// staffside pages (SameSite cookie restrictions from chrome-extension:// origin).
+const _staffBillingFetchedAt = {};
+
+async function fetchAndCacheBillingFromStaffsidePage(accountId) {
+  const now = Date.now();
+  if (_staffBillingFetchedAt[accountId] && now - _staffBillingFetchedAt[accountId] < 10 * 60 * 1000) return;
+  _staffBillingFetchedAt[accountId] = now;
+  try {
+    const resp = await fetch(`/staff/account/${accountId}/billing`, { credentials: 'include' });
+    if (!resp.ok) return;
+    if (!new URL(resp.url, location.origin).pathname.startsWith('/staff/')) return;
+    const html = await resp.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const bodyText = doc.body.innerText || doc.body.textContent || '';
+    if (/manually[\s\-]?billed/i.test(bodyText)) {
+      chrome.runtime.sendMessage({ type: 'CACHE_BILLING_DATA', accountId, billing: { manuallyBilled: true, plans: [] } }).catch(() => {});
+      return;
+    }
+    const lines = bodyText.split('\n').map(l => l.trim()).filter(Boolean);
+    const plans = [];
+    const MAP = {
+      'profiles + email': 'Email', 'email': 'Email', 'mobile messaging': 'SMS', 'sms': 'SMS',
+      'reviews': 'Reviews', 'social marketing': 'Social', 'social': 'Social',
+      'customer hub': 'Customer Hub', 'customer agent': 'Customer Agent',
+      'helpdesk': 'Helpdesk', 'advanced kdp': 'Advanced KDP',
+      'marketing analytics': 'Analytics', 'analytics': 'Analytics',
+      'success and support package': 'Success', 'klaviyo success and support package': 'Success',
+    };
+    const fmt = p => `$${p % 1 === 0 ? p.toFixed(0) : p.toFixed(2)}`;
+
+    // New format: "Email MRR: $500.00"
+    for (const line of lines) {
+      const m = line.match(/^(.+?)\s+MRR:\s+\$(\d+(?:\.\d+)?)$/);
+      if (!m) continue;
+      const price = parseFloat(m[2]);
+      if (price <= 0) continue;
+      const lower = m[1].toLowerCase().trim();
+      plans.push({ name: MAP[lower] || m[1].trim(), price: fmt(price) });
+    }
+
+    // Legacy format: "Plan name\n... / $500.00 / plan_id"
+    if (!plans.length) {
+      for (let i = 1; i < lines.length; i++) {
+        const m = lines[i].match(/\/\s*\$(\d+(?:\.\d+)?)\s*\//);
+        if (!m) continue;
+        const price = parseFloat(m[1]);
+        if (price <= 0) continue;
+        const lower = (lines[i - 1] || '').toLowerCase().replace(/\s*plan\s*$/, '').trim();
+        const name = MAP[lower] || null;
+        if (name) plans.push({ name, price: fmt(price) });
+      }
+    }
+
+    if (plans.length) {
+      chrome.runtime.sendMessage({ type: 'CACHE_BILLING_DATA', accountId, billing: { manuallyBilled: false, plans } }).catch(() => {});
+    }
+  } catch (_) {}
+}
+
 // ── Report staff session OR cache customer data ───────────────────────────────
 function report() {
   const { accountId, hasEditAccess } = getImpersonationState();
@@ -224,12 +380,15 @@ function report() {
   if (!accountId && path.startsWith('/staff/') && !path.startsWith('/staff/staffside-switch/')) {
     chrome.runtime.sendMessage({ type: 'SAVE_STAFF_SESSION' }).catch(() => {});
 
-    // Pre-cache integrations for this account using a same-origin fetch.
-    // This is the primary integration-fetch path — the service worker cannot
-    // reliably make credentialed requests to www.klaviyo.com from its
-    // chrome-extension:// origin due to SameSite cookie restrictions.
+    // Pre-cache integrations and billing for this account using same-origin fetches.
+    // This is the primary path for both — the service worker cannot reliably make
+    // credentialed requests to www.klaviyo.com from its chrome-extension:// origin
+    // due to SameSite cookie restrictions.
     const m = path.match(/\/staff\/account\/([A-Za-z0-9]+)/);
-    if (m) fetchAndCacheIntegrations(m[1]);
+    if (m) {
+      fetchAndCacheIntegrations(m[1]);
+      fetchAndCacheBillingFromStaffsidePage(m[1]);
+    }
 
     return;
   }
@@ -239,10 +398,11 @@ function report() {
   // On ANY page in a customer account: fetch user list + access level from banner
   fetchAndCacheFromApi(accountId, hasEditAccess);
 
-  // Proactively cache integrations from the customer-facing /integrations page.
-  // This runs on every page visit when impersonated, so the cache is warm by the
-  // time the ZD panel opens — avoids the gap where role shows but integrations don't.
+  // Proactively cache integrations and billing from customer-facing endpoints.
+  // These run on every page visit when impersonated, so the cache is warm by the
+  // time the ZD panel opens — avoids the gap where role shows but other data doesn't.
   fetchAndCacheIntegrationsFromCustomerPage(accountId);
+  fetchAndCacheBillingFromCustomerPage(accountId);
 
   // Fallback: scrape /integrations live DOM when impersonating and staffside data
   // isn't available yet. Uses fallback:true so it won't overwrite richer staffside data.
@@ -265,6 +425,13 @@ function report() {
     const remoteAccess = scrapeSecurityPage();
     if (remoteAccess !== null) {
       chrome.runtime.sendMessage({ type: 'CACHE_CUSTOMER_PAGE_DATA', accountId, remoteAccess }).catch(() => {});
+    }
+  }
+
+  if (path.startsWith('/settings/billing')) {
+    const billing = scrapeBillingOverview();
+    if (billing) {
+      chrome.runtime.sendMessage({ type: 'CACHE_BILLING_DATA', accountId, billing }).catch(() => {});
     }
   }
 }
@@ -294,6 +461,30 @@ chrome.runtime.onMessage.addListener((msg) => {
       fetchAndCacheIntegrationsFromCustomerPage(msg.accountId);
     } else {
       fetchAndCacheIntegrations(msg.accountId);
+    }
+  }
+});
+
+
+// ── On-demand billing fetch triggered by the ZD panel ─────────────────────────
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'FETCH_BILLING_FOR_ACCOUNT' && msg.accountId) {
+    const { accountId: currentAccountId } = getImpersonationState();
+    if (currentAccountId === msg.accountId) {
+      // Try live DOM scrape first (instant if already on billing page)
+      const billing = scrapeBillingOverview();
+      if (billing) {
+        chrome.runtime.sendMessage({ type: 'CACHE_BILLING_DATA', accountId: currentAccountId, billing }).catch(() => {});
+      } else {
+        // Not on the billing page — fetch it in the page context (same-origin, customer cookies)
+        // Reset throttle so this on-demand request always fires
+        delete _customerBillingFetchedAt[currentAccountId];
+        fetchAndCacheBillingFromCustomerPage(currentAccountId);
+      }
+    } else {
+      // Different account or not impersonated — fetch staffside billing page directly.
+      // Same-origin fetch from Klaviyo tab includes staff cookies without SameSite issues.
+      fetchAndCacheBillingFromStaffsidePage(msg.accountId);
     }
   }
 });

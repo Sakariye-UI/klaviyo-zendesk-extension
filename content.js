@@ -1,4 +1,4 @@
-// Klaviyo Staffside Quick Links — content script v3.5.1
+// Klaviyo Staffside Quick Links — content script v4.0.0
 // Injected on all /agent* pages so SPA navigation is covered automatically.
 
 const ACCOUNT_ID_FIELD = 66187667;
@@ -7,6 +7,9 @@ let currentTicketId = null;
 let injected        = false;
 let fetching        = false;
 let reinitTimer     = null;
+
+// Pre-warm the service worker so it's already running when we need it
+chrome.runtime.sendMessage({ type: 'PING' }).catch(() => {});
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
 function getTicketId() {
@@ -41,7 +44,6 @@ async function fetchTicketAndInject(ticketId) {
     if (ticketId !== currentTicketId) return;
 
     const accountId = (ticket.custom_fields || []).find(f => f.id === ACCOUNT_ID_FIELD)?.value || '';
-    if (!accountId) return;
 
     let email = '';
     if (ticket.requester_id) {
@@ -61,7 +63,7 @@ async function fetchTicketAndInject(ticketId) {
 // ── Wait for the verified email to appear in the right-panel profile ───────────
 function waitForProfileAndInject(accountId, ticketId, getEmail) {
 
-  function findProfileEmailEl(email) {
+  function findProfileEmailEl(email, requireOrg = true) {
     const emailLower = email.toLowerCase();
 
     for (const dt of document.querySelectorAll('dl dt')) {
@@ -86,7 +88,20 @@ function waitForProfileAndInject(accountId, ticketId, getEmail) {
       const dl = el.closest('dl');
       return !!dl && dl.textContent.includes('Org.');
     });
-    return emailEl ? { emailEl, dl: emailEl.closest('dl') } : null;
+    if (emailEl) return { emailEl, dl: emailEl.closest('dl') };
+
+    // Relaxed fallback — no Org. check. Used for requesters not signed in who have
+    // no org in their profile. Still requires the email to appear inside a dl.
+    if (!requireOrg) {
+      const fallbackEl = Array.from(document.querySelectorAll('a, span, div, p')).find(el => {
+        if (el.childElementCount !== 0) return false;
+        if (el.textContent.trim().toLowerCase() !== emailLower) return false;
+        return !!el.closest('dl');
+      });
+      return fallbackEl ? { emailEl: fallbackEl, dl: fallbackEl.closest('dl') } : null;
+    }
+
+    return null;
   }
 
   function tryInject() {
@@ -96,7 +111,10 @@ function waitForProfileAndInject(accountId, ticketId, getEmail) {
     const email = getEmail();
     if (!email) return false;
 
-    const found = findProfileEmailEl(email);
+    // When there's no accountId (no Klaviyo account linked), relax the Org. requirement
+    // so tickets from non-signed-in requesters still get the search button.
+    let found = findProfileEmailEl(email, true);
+    if (!found && !accountId) found = findProfileEmailEl(email, false);
     if (!found) return false;
 
     const { emailEl, dl } = found;
@@ -137,9 +155,7 @@ function waitForProfileAndInject(accountId, ticketId, getEmail) {
 
 // ── Dark mode detection ───────────────────────────────────────────────────────
 function detectDark() {
-  // System-level dark mode
   if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) return true;
-  // Zendesk-specific dark mode — sample the background of the page body/root
   const probe = document.body;
   const bg = window.getComputedStyle(probe).backgroundColor;
   const rgb = bg.match(/\d+/g)?.map(Number);
@@ -154,8 +170,6 @@ function applyDarkMode(panel) {
   const dark = detectDark();
   panel.classList.toggle('klv-dark', dark);
   if (dark) {
-    // Walk up the DOM to find Zendesk's actual sidebar background color
-    // so the panel blends in perfectly rather than using a hardcoded value
     let bg = null;
     let el = panel.parentElement;
     while (el && el !== document.body) {
@@ -174,7 +188,6 @@ function applyDarkMode(panel) {
   }
 }
 
-// Watch for Zendesk theme changes (light ↔ dark toggle)
 const darkModeObserver = new MutationObserver(() => {
   const panel = document.getElementById('klv-staffside-panel');
   if (panel) applyDarkMode(panel);
@@ -188,13 +201,25 @@ function injectPanel(dl, emailSection, accountId, email) {
 
   const panel = document.createElement('div');
   panel.id = 'klv-staffside-panel';
-  panel.dataset.accountId = accountId;
+  panel.dataset.accountId = accountId || '';
   panel.dataset.email = email;
-  panel.innerHTML = `<div class="klv-loading"><div class="klv-spinner"></div>Loading…</div>`;
 
   applyDarkMode(panel);
   dl.insertBefore(panel, emailSection.nextSibling);
   injected = true;
+
+  // No accountId — show a staffside search link by email only
+  if (!accountId) {
+    const searchUrl = `https://www.klaviyo.com/staff/users/search?q=${encodeURIComponent(email)}`;
+    panel.innerHTML = `
+      <div class="klv-buttons">
+        <a href="${searchUrl}" target="_blank" class="klv-btn klv-btn-staffside">View in Staffside</a>
+      </div>
+    `;
+    return;
+  }
+
+  panel.innerHTML = `<div class="klv-loading"><div class="klv-spinner"></div>Loading…</div>`;
 
   chrome.runtime.sendMessage(
     { type: 'FETCH_STAFFSIDE_DATA', accountId, email },
@@ -211,7 +236,6 @@ function refreshPanel(panel) {
   const email     = panel.dataset.email;
   if (!accountId) return;
 
-  // Show spinner in the refresh button without wiping the whole panel
   const btn = panel.querySelector('.klv-btn-refresh');
   if (btn) {
     btn.disabled = true;
@@ -223,21 +247,15 @@ function refreshPanel(panel) {
     { type: 'FETCH_STAFFSIDE_DATA', accountId, email, force: true },
     (resp) => {
       const { role = null, hasEditAccess = false, accessExpiry = null, fromCache = false } = resp || {};
-      renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpiry, fromCache });
+      renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpiry, fromCache, forceData: true });
     }
   );
 }
 
 // ── Render final panel ────────────────────────────────────────────────────────
-function renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpiry, fromCache }) {
-  // Preserve data attributes across re-renders
+function renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpiry, fromCache, forceData = false }) {
   panel.dataset.accountId = accountId;
   panel.dataset.email     = email || panel.dataset.email || '';
-
-  // Snapshot existing integrations before wiping innerHTML — re-inserted immediately
-  // after rebuild so they never disappear during a refresh, even while the async
-  // fetchAndRenderIntegrations call is still in flight.
-  const existingIntsHtml = panel.querySelector('.klv-integrations')?.outerHTML || null;
 
   const staffsideUrl = `https://www.klaviyo.com/staff/account/${accountId}/overview`;
   const switchUrl    = hasEditAccess
@@ -255,6 +273,11 @@ function renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpir
 
   const switchClass = hasEditAccess ? 'klv-btn-switch-write' : 'klv-btn-switch-read';
   const switchText  = hasEditAccess ? 'Go into account'      : 'Go into account (Read)';
+
+  // Preserve existing integrations and billing rows across re-render so they
+  // don't flash away while the refresh fetch is in flight.
+  const existingInt     = panel.querySelector('.klv-integrations');
+  const existingBilling = panel.querySelector('.klv-billing');
 
   panel.innerHTML = `
     <div class="klv-role-row">
@@ -275,15 +298,15 @@ function renderPanel(panel, { accountId, email, role, hasEditAccess, accessExpir
     </div>
   `;
 
-  // Restore integrations immediately so they don't disappear during a refresh
-  if (existingIntsHtml) {
-    const buttons = panel.querySelector('.klv-buttons');
-    if (buttons) buttons.insertAdjacentHTML('beforebegin', existingIntsHtml);
-  }
+  // Re-insert preserved rows before the buttons so layout is unchanged
+  const btns = panel.querySelector('.klv-buttons');
+  if (existingBilling) panel.insertBefore(existingBilling, btns);
+  if (existingInt)     panel.insertBefore(existingInt, btns);
 
   applyDarkMode(panel);
   panel.querySelector('.klv-btn-refresh')?.addEventListener('click', () => refreshPanel(panel));
-  fetchAndRenderIntegrations(panel, accountId);
+  fetchAndRenderIntegrations(panel, accountId, 0, forceData);
+  fetchAndRenderBilling(panel, accountId, 0, forceData);
 }
 
 function formatExpiry(str) {
@@ -341,7 +364,6 @@ const INTEGRATION_EMOJIS = {
 
 function getIntegrationEmoji(name) {
   const lower = name.toLowerCase();
-  // Try longest match first to avoid 'meta' matching 'meta ads' incorrectly
   const keys = Object.keys(INTEGRATION_EMOJIS).sort((a, b) => b.length - a.length);
   for (const key of keys) {
     if (lower.includes(key)) return INTEGRATION_EMOJIS[key];
@@ -351,14 +373,18 @@ function getIntegrationEmoji(name) {
 
 // ── Shared: build + insert the integrations row ──────────────────────────────
 function renderIntegrationsRow(panel, integrations) {
-  if (panel.querySelector('.klv-integrations')) return; // already shown
+  if (panel.querySelector('.klv-integrations')) return;
+  const accountId = panel.dataset.accountId;
+  const fallbackUrl = accountId
+    ? `https://www.klaviyo.com/staff/account/${accountId}/integrations`
+    : 'https://www.klaviyo.com/integrations';
   const iconsHtml = integrations.map(int => {
     const cls = int.disabled ? ' klv-int-disabled' : '';
-    if (int.iconUrl) {
-      return `<img class="klv-int-icon${cls}" src="${esc(int.iconUrl)}" title="${esc(int.name)}" alt="${esc(int.name)}">`;
-    }
-    const emoji = getIntegrationEmoji(int.name);
-    return `<span class="klv-int-icon klv-int-emoji${cls}" title="${esc(int.name)}">${emoji}</span>`;
+    const url = int.pageUrl || fallbackUrl;
+    const icon = int.iconUrl
+      ? `<img class="klv-int-icon${cls}" src="${esc(int.iconUrl)}" title="${esc(int.name)}" alt="${esc(int.name)}">`
+      : `<span class="klv-int-icon klv-int-emoji${cls}" title="${esc(int.name)}">${getIntegrationEmoji(int.name)}</span>`;
+    return `<a href="${esc(url)}" target="_blank" title="${esc(int.name)}" style="display:inline-flex;text-decoration:none;">${icon}</a>`;
   }).join('');
 
   const row = document.createElement('div');
@@ -373,28 +399,26 @@ function renderIntegrationsRow(panel, integrations) {
 }
 
 // ── Fetch + render integrations ───────────────────────────────────────────────
-// Primary path: background pushes via PUSH_INTEGRATIONS the instant
-// klaviyo-content.js caches them — typically < 1 second.
-// Fallback: retry at 1 s and 4 s in case the push is missed.
-function fetchAndRenderIntegrations(panel, accountId, attempt) {
+function fetchAndRenderIntegrations(panel, accountId, attempt, force) {
   attempt = attempt || 0;
   chrome.runtime.sendMessage(
-    { type: 'FETCH_INTEGRATIONS', accountId },
+    { type: 'FETCH_INTEGRATIONS', accountId, force: !!force },
     (resp) => {
       const integrations = resp?.integrations || [];
       if (!integrations.length) {
-        // Retry twice as a fallback (1 s then 4 s) — push path covers most cases
-        if (attempt < 2 && document.getElementById('klv-staffside-panel') === panel) {
-          setTimeout(() => fetchAndRenderIntegrations(panel, accountId, attempt + 1), attempt === 0 ? 1000 : 4000);
+        if (attempt < 3 && document.getElementById('klv-staffside-panel') === panel) {
+          setTimeout(() => fetchAndRenderIntegrations(panel, accountId, attempt + 1, false), attempt === 0 ? 1500 : 4000);
         }
         return;
       }
+      // On force refresh, replace existing row only if new data came back
+      if (force) panel.querySelector('.klv-integrations')?.remove();
       renderIntegrationsRow(panel, integrations);
     }
   );
 }
 
-// ── Push listener — background notifies us the instant cache is warm ──────────
+// ── Push listener — background notifies us the instant integrations cache is warm ──
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type !== 'PUSH_INTEGRATIONS') return;
   const panel = document.getElementById('klv-staffside-panel');
@@ -402,17 +426,88 @@ chrome.runtime.onMessage.addListener((msg) => {
   renderIntegrationsRow(panel, msg.integrations);
 });
 
-// ── Push listener — background pushes role/access the instant it's cached ────
+// ── Billing row ───────────────────────────────────────────────────────────────
+const BILLING_PRIORITY = ['email', 'sms'];
+const PLAN_SORT_NORM   = { 'profiles + email': 'email', 'mobile messaging': 'sms' };
+
+function sortPlans(plans) {
+  return [...plans].sort((a, b) => {
+    const an = PLAN_SORT_NORM[a.name.toLowerCase()] || a.name.toLowerCase();
+    const bn = PLAN_SORT_NORM[b.name.toLowerCase()] || b.name.toLowerCase();
+    const ai = BILLING_PRIORITY.indexOf(an);
+    const bi = BILLING_PRIORITY.indexOf(bn);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+}
+
+function renderBillingRow(panel, billing, accountId) {
+  if (panel.querySelector('.klv-billing')) return;
+  if (!billing) return;
+
+  const billingUrl = `https://www.klaviyo.com/staff/account/${accountId}/billing`;
+  let plansHtml;
+
+  if (billing.manuallyBilled) {
+    plansHtml = `<span class="klv-billing-name klv-access-value-read">Manually Billed</span>`;
+  } else if (Array.isArray(billing.plans) && billing.plans.length) {
+    const NAME_ABBR = {
+      'profiles + email': 'Email',
+      'email':            'Email',
+      'mobile messaging': 'SMS',
+      'sms':              'SMS',
+      'customer hub':     'Cust. Hub',
+      'customer agent':   'Cust. Agent',
+      'success and support package':         'Success',
+      'klaviyo success and support package': 'Success',
+      'marketing analytics': 'Analytics',
+      'advanced kdp':        'Adv. KDP',
+    };
+    const sorted = sortPlans(billing.plans);
+    const items = sorted.map(p => {
+      const short = NAME_ABBR[p.name.toLowerCase()] || p.name;
+      return `<span class="klv-billing-item">${esc(short)} <a href="${esc(billingUrl)}" target="_blank" class="klv-billing-price">${esc(p.price)}</a></span>`;
+    }).join('');
+    plansHtml = `<div class="klv-billing-wrap">${items}</div>`;
+  } else {
+    return;
+  }
+
+  const row = document.createElement('div');
+  row.className = 'klv-billing klv-access';
+  row.innerHTML = `<span class="klv-access-key">Plans:</span>${plansHtml}`;
+
+  const ints = panel.querySelector('.klv-integrations');
+  const btns = panel.querySelector('.klv-buttons');
+  if (ints)      panel.insertBefore(row, ints);
+  else if (btns) panel.insertBefore(row, btns);
+  else           panel.appendChild(row);
+}
+
+function fetchAndRenderBilling(panel, accountId, attempt, force) {
+  attempt = attempt || 0;
+  chrome.runtime.sendMessage(
+    { type: 'FETCH_BILLING_DATA', accountId, force: !!force },
+    (resp) => {
+      const billing = resp?.billing;
+      if (!billing) {
+        if (attempt < 3 && document.getElementById('klv-staffside-panel') === panel) {
+          setTimeout(() => fetchAndRenderBilling(panel, accountId, attempt + 1, false), attempt === 0 ? 1500 : 4000);
+        }
+        return;
+      }
+      panel.querySelector('.klv-billing')?.remove();
+      renderBillingRow(panel, billing, accountId);
+    }
+  );
+}
+
+// ── Push listener — background pushes billing the instant it's cached ─────────
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type !== 'PUSH_STAFFSIDE_DATA') return;
+  if (msg.type !== 'PUSH_BILLING_DATA') return;
   const panel = document.getElementById('klv-staffside-panel');
   if (!panel || panel.dataset.accountId !== msg.accountId) return;
-  const { role = null, hasEditAccess = false, accessExpiry = null, fromCache = false } = msg;
-  renderPanel(panel, {
-    accountId: msg.accountId,
-    email:     panel.dataset.email,
-    role, hasEditAccess, accessExpiry, fromCache
-  });
+  panel.querySelector('.klv-billing')?.remove();
+  renderBillingRow(panel, msg.billing, msg.accountId);
 });
 
 function esc(s) {

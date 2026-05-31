@@ -1,4 +1,4 @@
-/* Klaviyo Staffside Quick Links v1.9 — matches Zendesk right-panel typography */
+/* Klaviyo Staffside Quick Links v4.0.0 — matches Zendesk right-panel typography */
 
 #klv-staffside-panel {
   margin: 6px 0 8px 0;
@@ -79,6 +79,8 @@
   font-weight: 400;
   color: #5c6970;
   white-space: nowrap;
+  min-width: 52px;
+  flex-shrink: 0;
 }
 
 #klv-staffside-panel .klv-access-value {
@@ -153,6 +155,41 @@
   font-size: 14px;
   color: #adbabd;
   letter-spacing: 2px;
+}
+
+/* ── Plans / Billing row ── */
+#klv-staffside-panel .klv-billing {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 20px;
+  line-height: 1.4;
+}
+
+#klv-staffside-panel .klv-billing-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  flex: 1;
+}
+
+#klv-staffside-panel .klv-billing-item {
+  font-size: 14px;
+  color: #68737d;
+  white-space: nowrap;
+}
+
+#klv-staffside-panel .klv-billing-price {
+  color: #1f73b7;
+  font-weight: 600;
+  text-decoration: none;
+}
+#klv-staffside-panel .klv-billing-price:hover { text-decoration: underline; }
+
+#klv-staffside-panel .klv-billing-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #68737d;
 }
 
 /* ── Buttons — stacked by default, side by side only when panel is very wide ── */
@@ -291,6 +328,10 @@
 #klv-staffside-panel.klv-dark .klv-role-unknown { background: #374151; color: #9ca3af; }
 #klv-staffside-panel.klv-dark .klv-access-value-write { color: #6ee7b7; }
 #klv-staffside-panel.klv-dark .klv-access-value-read  { color: #9ca3af; }
+#klv-staffside-panel.klv-dark .klv-billing-name  { color: #9ca3af; }
+#klv-staffside-panel.klv-dark .klv-billing-price { color: #60a5fa; }
+#klv-staffside-panel.klv-dark .klv-billing-chip  { background: #374151; border-color: #4b5563; color: #d1d5db; }
+#klv-staffside-panel.klv-dark .klv-billing-chip:hover { background: #4b5563; }
 #klv-staffside-panel.klv-dark .klv-spinner {
   border-color: #374151;
   border-top-color: #60a5fa;
@@ -339,4 +380,8 @@
   .klv-access-value-write { color: #6ee7b7; }
   .klv-access-value-read  { color: #9ca3af; }
   .klv-spinner { border-color: #374151; border-top-color: #60a5fa; }
+  #klv-staffside-panel .klv-billing-name  { color: #9ca3af; }
+  #klv-staffside-panel .klv-billing-price { color: #60a5fa; }
+  #klv-staffside-panel .klv-billing-chip  { background: #374151; border-color: #4b5563; color: #d1d5db; }
+  #klv-staffside-panel .klv-billing-chip:hover { background: #4b5563; }
 }
