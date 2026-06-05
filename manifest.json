@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ZD Staffside Quick Links",
-  "version": "4.0.0",
+  "version": "4.1.1",
   "description": "Injects Staffside quick-access buttons into Klaviyo Zendesk tickets.",
   "permissions": ["storage", "cookies", "webNavigation"],
   "host_permissions": [
