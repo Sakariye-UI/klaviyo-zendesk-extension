@@ -1,4 +1,4 @@
-// Klaviyo Staffside Quick Links — content script v4.0.0
+// Klaviyo Staffside Quick Links — content script v4.2.0
 // Injected on all /agent* pages so SPA navigation is covered automatically.
 
 const ACCOUNT_ID_FIELD = 66187667;
@@ -47,10 +47,13 @@ async function fetchTicketAndInject(ticketId) {
 
     let email = '';
     if (ticket.requester_id) {
-      fetch(`/api/v2/users/${ticket.requester_id}.json`, { credentials: 'include' })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { email = d?.user?.email?.toLowerCase() || ''; })
-        .catch(() => {});
+      try {
+        const r = await fetch(`/api/v2/users/${ticket.requester_id}.json`, { credentials: 'include' });
+        if (r.ok) {
+          const d = await r.json();
+          email = d?.user?.email?.toLowerCase() || '';
+        }
+      } catch (_) {}
     }
 
     waitForProfileAndInject(accountId, ticketId, () => email);
@@ -406,8 +409,11 @@ function fetchAndRenderIntegrations(panel, accountId, attempt, force) {
     (resp) => {
       const integrations = resp?.integrations || [];
       if (!integrations.length) {
-        if (attempt < 3 && document.getElementById('klv-staffside-panel') === panel) {
-          setTimeout(() => fetchAndRenderIntegrations(panel, accountId, attempt + 1, false), attempt === 0 ? 1500 : 4000);
+        if (document.getElementById('klv-staffside-panel') !== panel) return;
+        // Quick retries: 1.5s, 4s, 4s — then slow poll every 15s for ~2 minutes
+        const delay = attempt === 0 ? 1500 : attempt < 3 ? 4000 : 15000;
+        if (attempt < 10) {
+          setTimeout(() => fetchAndRenderIntegrations(panel, accountId, attempt + 1, false), delay);
         }
         return;
       }
@@ -490,8 +496,11 @@ function fetchAndRenderBilling(panel, accountId, attempt, force) {
     (resp) => {
       const billing = resp?.billing;
       if (!billing) {
-        if (attempt < 3 && document.getElementById('klv-staffside-panel') === panel) {
-          setTimeout(() => fetchAndRenderBilling(panel, accountId, attempt + 1, false), attempt === 0 ? 1500 : 4000);
+        if (document.getElementById('klv-staffside-panel') !== panel) return;
+        // Quick retries: 1.5s, 4s, 4s — then slow poll every 15s for ~2 minutes
+        const delay = attempt === 0 ? 1500 : attempt < 3 ? 4000 : 15000;
+        if (attempt < 10) {
+          setTimeout(() => fetchAndRenderBilling(panel, accountId, attempt + 1, false), delay);
         }
         return;
       }

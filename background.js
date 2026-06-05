@@ -1,4 +1,4 @@
-// Background service worker — ZD Staffside Quick Links v4.0.0
+// Background service worker — ZD Staffside Quick Links v4.2.0
 
 // ── Cookie-swap lock ──────────────────────────────────────────────────────────
 // All operations that swap Klaviyo cookies must run through this lock so they
@@ -104,7 +104,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       proceed.then(shouldWrite => {
         if (!shouldWrite) return;
         writeIntegrationsCache(accountId, integrations);
-        // Push to waiting Zendesk tabs so they update instantly
+        // Broadcast to ALL open ZD ticket tabs — mirrors cacheAndPushBilling so integrations
+        // push reliably regardless of whether pendingIntegrationTabs survived a worker restart.
+        chrome.tabs.query({ url: 'https://klaviyo.zendesk.com/agent/tickets/*' }).then(tabs => {
+          for (const tab of tabs) {
+            chrome.tabs.sendMessage(tab.id, { type: 'PUSH_INTEGRATIONS', accountId, integrations }).catch(() => {});
+          }
+        }).catch(() => {});
+        // Also flush any in-memory pending tabs registered before the worker restarted
         const waiting = pendingIntegrationTabs[accountId];
         if (waiting) {
           delete pendingIntegrationTabs[accountId];
@@ -484,8 +491,9 @@ async function fetchBillingData(accountId, force) {
   // 2. Direct fetch — fast when cookies are already SameSite-stripped by a prior swap.
   try {
     const billingUrl = 'https://www.klaviyo.com/staff/account/' + accountId + '/billing';
-    const resp = await fetch(billingUrl, { credentials: 'include' });
-    if (resp.ok && new URL(resp.url).pathname.startsWith('/staff/')) {
+    const resp = await fetch(billingUrl, { credentials: 'include', redirect: 'manual' });
+    if (resp.type === 'opaqueredirect' || !resp.ok) { /* redirect to SSO — skip */ }
+    else if (new URL(resp.url).pathname.startsWith('/staff/')) {
       const html = await resp.text();
       const billing = parseStaffsideBilling(html);
       if (billing) {
@@ -628,8 +636,9 @@ const INTEGRATIONS_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 async function fetchIntegrationsLive(accountId) {
   try {
     const url = 'https://www.klaviyo.com/staff/account/' + accountId + '/integrations';
-    const resp = await fetch(url, { credentials: 'include' });
-    if (resp.ok && new URL(resp.url).pathname.startsWith('/staff/')) {
+    const resp = await fetch(url, { credentials: 'include', redirect: 'manual' });
+    if (resp.type === 'opaqueredirect' || !resp.ok) return [];
+    if (new URL(resp.url).pathname.startsWith('/staff/')) {
       const html = await resp.text();
       return parseIntegrations(html);
     }
@@ -775,11 +784,33 @@ function parseStaffsideBilling(html) {
     const lines = bodyText.split('\n').map(l => l.trim()).filter(Boolean);
     const plans = [];
 
-    // New format: "Email MRR: $500.00" lines in the summary section
+    // Primary: "Monthly total" breakdown section — shows what the customer actually pays
+    // (handles comma-formatted prices like $3,400.00 and $6,240.00)
+    const mtIdx = lines.findIndex(l => l === 'Monthly total');
+    const taxIdx = lines.findIndex(l => /^Total\s*\(excl\.?\s*tax\)/i.test(l));
+    if (mtIdx !== -1 && taxIdx !== -1) {
+      const section = lines.slice(mtIdx + 1, taxIdx);
+      for (let i = 0; i < section.length; i++) {
+        const pm = section[i].match(/^\$(\d[\d,]*(?:\.\d+)?)$/);
+        if (!pm) continue;
+        const price = parseFloat(pm[1].replace(/,/g, ''));
+        if (price <= 0) continue;
+        // Look back for the plan name (skip sub-description lines and the collapsed total line)
+        const candidate = (section[i - 2] && !/^\$/.test(section[i - 2]) && section[i - 2] !== 'Monthly total')
+          ? section[i - 2] : section[i - 1];
+        if (candidate && !/^\$/.test(candidate) && candidate !== 'Monthly total') {
+          const name = BILLING_NAME_MAP[candidate.toLowerCase().replace(/\s*plan\s*$/, '').trim()] || candidate.trim();
+          plans.push({ name, price: formatBillingPrice(price) });
+        }
+      }
+      if (plans.length) return { manuallyBilled: false, plans };
+    }
+
+    // Fallback: "Email MRR: $500.00" lines — handles comma-formatted amounts
     for (const line of lines) {
-      const m = line.match(/^(.+?)\s+MRR:\s+\$(\d+(?:\.\d+)?)$/);
+      const m = line.match(/^(.+?)\s+MRR:\s+\$(\d[\d,]*(?:\.\d+)?)$/);
       if (!m) continue;
-      const price = parseFloat(m[2]);
+      const price = parseFloat(m[2].replace(/,/g, ''));
       if (price <= 0) continue;
       const lower = m[1].toLowerCase().trim();
       const name = BILLING_NAME_MAP[lower] || m[1].trim();
@@ -789,9 +820,9 @@ function parseStaffsideBilling(html) {
 
     // Legacy format: "Profiles + email plan\n35k profiles ... / $500.00 / plan_id"
     for (let i = 1; i < lines.length; i++) {
-      const m = lines[i].match(/\/\s*\$(\d+(?:\.\d+)?)\s*\//);
+      const m = lines[i].match(/\/\s*\$(\d[\d,]*(?:\.\d+)?)\s*\//);
       if (!m) continue;
-      const price = parseFloat(m[1]);
+      const price = parseFloat(m[1].replace(/,/g, ''));
       if (price <= 0) continue;
       const lower = (lines[i - 1] || '').toLowerCase().replace(/\s*plan\s*$/, '').trim();
       const name = BILLING_NAME_MAP[lower] || null;
@@ -949,3 +980,26 @@ async function fetchRoleFromUserPage(userPageUrl, accountId) {
     return m ? m[1] : null;
   } catch (_) { return null; }
 }
+
+// ── When a Klaviyo tab finishes loading, flush any pending billing/integration fetches ──
+// pendingIntegrationTabs and pendingBillingTabs are in-memory and get wiped on service
+// worker restart. This listener means any account that was waiting gets its fetch
+// triggered the moment any Klaviyo tab becomes available — no manual action needed.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url?.startsWith('https://www.klaviyo.com/')) return;
+
+  // Flush pending integrations
+  for (const [accountId, tabSet] of Object.entries(pendingIntegrationTabs)) {
+    if (tabSet.size) {
+      chrome.tabs.sendMessage(tabId, { type: 'FETCH_INTEGRATIONS_FOR_ACCOUNT', accountId }).catch(() => {});
+    }
+  }
+
+  // Flush pending billing
+  for (const [accountId, tabSet] of Object.entries(pendingBillingTabs)) {
+    if (tabSet.size) {
+      chrome.tabs.sendMessage(tabId, { type: 'FETCH_BILLING_FOR_ACCOUNT', accountId }).catch(() => {});
+    }
+  }
+});
